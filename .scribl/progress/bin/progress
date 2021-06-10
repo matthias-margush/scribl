@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+
+PROGRESS_VERBOSE=${PROGRESS_VERBOSE:-f}
+export PROGRESS_VERBOSE
+if [ "$PROGRESS_VERBOSE" = 'y' ] \
+    || [ "$PROGRESS_VERBOSE" = 't' ] \
+    || [ "$PROGRESS_VERBOSE" = 'yes' ] \
+    || [ "$PROGRESS_VERBOSE" = 'true' ]
+then
+  verbose=true
+else
+  verbose=false
+fi
+
+red='\033[0;31m'
+green='\033[0;32m'
+clear='\033[0m'
+
+be_quiet=0
+quietly() {
+  be_quiet=$((be_quiet+1))
+  "$@"
+  local result=$?
+  be_quiet=$((be_quiet-1))
+  return $result
+}
+
+indentation=0
+indent() {
+  indentation=$((indentation+1))
+}
+
+unindent() {
+  indentation=$((indentation-1))
+}
+
+padding() {
+  local i="$indentation"
+  while [ $i -gt 0 ]
+  do
+    printf '%s' ' '
+    i=$((i-1))
+  done
+}
+
+err() {
+  local format="$1"; shift
+  padding
+  # shellcheck disable=SC2059
+  printf "$format" "$@" >&2
+  return 1
+}
+
+clear_line() {
+  printf "\r                                                                                            "
+}
+
+checkmark() {
+  local format="$1"; shift
+  if [ $be_quiet -eq 0 ]
+  then
+    printf "\r"
+    padding
+    # shellcheck disable=SC2059
+    printf "${green}[✔]${clear} $format" "$@"
+  fi
+}
+
+xmark() {
+  local format="$1"; shift
+  padding
+  # shellcheck disable=SC2059
+  printf "${red}[✘]${clear} $format" "$@"
+}
+
+hint() {
+  local format="$1"; shift
+  printf '\n'
+  padding
+  # shellcheck disable=SC2059
+  printf "   ✋ $format\n" "$@"
+}
+
+logged() {
+  local file="$1"; shift
+  local p
+  p=$(padding)
+  printf "\n %s❯ %s\n" "$p" "$*"
+  sed "s/^/ $p/" "$file"
+}
+
+spin() {
+  local output="$1"
+  local pid="$2"
+  local message="$3"
+
+  if $verbose
+  then
+    sed "s/^/ $(padding)/" <"$output"
+    wait "$pid"
+    return $?
+  fi
+
+  if [ $be_quiet -gt 0 ]
+  then
+    wait "$pid"
+    return $?
+  fi
+
+  while ps a | awk '{print $1}' | grep -q "$pid"
+  do
+    printf "\r$(padding)${green}[.] ${clear}$message"; sleep 0.1
+    printf "\r$(padding)${green}[-] ${clear}$message"; sleep 0.1
+    printf "\r$(padding)${green}[+] ${clear}$message"; sleep 0.1
+    printf "\r$(padding)${green}[*] ${clear}$message"; sleep 0.1
+    printf "\r$(padding)${green}[-] ${clear}$message"; sleep 0.1
+  done
+  wait "$pid"
+  return $?
+}
+
+
+if $verbose
+then
+  step_output=$(mktemp -u)
+  mkfifo -m 600 "$step_output"
+else
+  step_output=$(mktemp)
+fi
+trap '{ rm -f "$step_output"; }' EXIT
+
+run_step() {
+  local message="$1"
+  shift
+
+  if [ "$message" != "" ] && [ $be_quiet -eq 0 ]
+  then
+    $verbose && printf "$(padding)${green}[✔] ${clear}$message:\n"
+    $verbose && printf " %s❯ %s\n" "$(padding)" "$*"
+    $verbose || printf "\r$(padding)${green}[ ] ${clear}$message"
+  fi
+
+  # sh -c "$*" >"$step_output" 2>"$step_output" &
+  $* >"$step_output" 2>"$step_output" &
+  spin "$step_output" $! "$message"
+
+  local result=$?
+  if [ $result -ne 0 ]
+  then
+    printf "\r$(padding)${red}[✘] ${clear}%s: Failed 😿" "$message"
+    if ! $verbose
+    then
+      logged "$step_output" "$@"
+    fi
+  else
+    if [ $be_quiet -eq 0 ] && ! $verbose
+    then
+      printf "\r$(padding)${green}[✔] ${clear}$message"
+      $verbose && logged "$step_output" "$@"
+    fi
+  fi
+  return $result
+}
+
+run() {
+  printf "\r"
+  run_step "$@"
+  result=$?
+  if [ $be_quiet -eq 0 ]
+  then
+    printf '\n'
+  fi
+  return $result
+}
+
+hints() {
+  local label="$1"
+  case "$label" in
+    k8s-connectivity )
+      hint "If you're using minikube - is it running (minikube start)?"
+      ;;
+    *)
+      hint 'Hmmm. 🤷'
+      ;;
+  esac
+}

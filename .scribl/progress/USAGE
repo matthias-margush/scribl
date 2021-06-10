@@ -1,0 +1,6 @@
+progress CMD
+
+  Functions that display something distracting while running long commands
+
+Functions:
+  run MSG CMD    Run CMD with a message and a busy indicator

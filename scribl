@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+#
+# Copyright 2021 Matthias C. Margush
+#
+# Redistribution and use in source and binary forms, with or without modification,
+# are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its contributors
+#    may be used to endorse or promote products derived from this software without
+#    specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+# ANY DIRECT, INDIRECT, INCISCRIBLTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+# ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+SCRIBL_PATH="$SCRIBL_PATH:$XDG_CONFIG_HOME/scribl:$PWD/.scribl:$SCRIPT_DIR/.scribl"
+
+# Prints the first directory in SCRIBL_PATH where the requested scribl is located.
+scribl-which() {
+    local scribl="$1"
+    local scribl_dir
+    local scribl_paths=${SCRIBL_PATH//:/$'\n'}
+
+    for dir in $scribl_paths
+    do
+        scribl_dir="$dir/$scribl"
+        if [ -d "$scribl_dir" ]
+        then
+            printf '%s\n' "$scribl_dir"
+            return
+        fi
+    done
+
+    return 1
+}
+
+# Prints usage text for a scribl
+scribl-print-short-usage() {
+    local scribl_dir
+    local scribl
+
+    scribl_dir=$(dirname "$1")
+    scribl=$(basename "$1")
+
+    printf "  %s" "$scribl"
+    if [ -f "$scribl_dir/$scribl/USAGE" ]
+    then
+        printf '	'
+        head -n 3 "$scribl_dir/$scribl/USAGE" | tail -n +3
+    fi
+    printf "\n"
+}
+
+# Lists scribls in the given directory.
+scribl-list-in-dir() {
+    local scribl_dir="$1"
+    local short_usage
+    local scribl
+
+    if [ -d "$scribl_dir" ]
+    then
+        for scribl_path in "$scribl_dir"/*/
+        do
+            short_usage=$(scribl-print-short-usage "$scribl_path")
+            printf '\n%s\n' "$short_usage"
+        done
+    fi
+}
+
+# Prints the USAGE of a scribl.
+scribl-usage() {
+    local scribl_dir="$1"
+
+    if [ -f "$scribl_dir/USAGE" ]
+    then
+        cat "$scribl_dir/USAGE"
+    fi
+}
+
+# Prints all scribls on SCRIBL_PATH
+scribl-list() {
+    local usages
+    local scribl
+    local scribl_dir
+
+    scribl="$1"
+    scribl_dir=$(scribl-which "$scribl")
+
+    if [ "$scribl" != "" ] && [ "$scribl_dir" != "" ]
+    then
+        printf "scribl "
+        scribl-usage "$scribl_dir"
+        printf '\n'
+    else
+        cat - <<EOF
+scribl NAME CMD
+
+  A tool for organizing small scripts.
+
+Available Scribls:
+EOF
+        # for dir in $(echo "${SCRIBL_PATH//:/$'\n'}")
+        for dir in ${SCRIBL_PATH//:/$'\n'}
+        do
+            usages=$(printf '%s\n%s' "$usages" "$(scribl-list-in-dir "$dir")")
+        done
+    fi
+    printf '%s\n' "$usages" | column -t -s '	' | sort | uniq
+}
+
+# Prints the path to a scribl command.
+scribl-use() {
+    local scribl="$1"
+    local cmd="$2"
+    local scribl_dir
+
+    shift; shift
+
+    if [ "$cmd" = "" ]
+    then
+        cmd="$scribl"
+    fi
+
+    scribl_dir=$(scribl-which "$scribl")
+    if [ -d "$scribl_dir" ] && [ -f "$scribl_dir/bin/$cmd" ]
+    then
+        printf '%s/bin/%s\n' "$scribl_dir" "$cmd"
+        return 0
+    fi
+
+    return 1
+}
+
+# Runs a scribl command.
+scribl-run() {
+    local scribl="$1"
+    local cmd="$2"
+    local cmd_path
+    local scribl_dir
+
+    shift; shift
+
+    if [ "$scribl" == "" ]
+    then
+        scribl-list "$@"
+        exit 0
+    fi
+
+
+    cmd_path=$(scribl-use "$scribl" "$cmd")
+    if [ "$cmd_path" == "" ]
+    then
+        if [ "$cmd" == "" ]
+        then
+            scribl_dir=$(scribl-which "$scribl")
+            scribl-usage "$scribl_dir"
+            echo
+            exit 0
+        fi
+
+        printf 'Error: command "%s" in scribl "%s" not found\n\n' "$cmd" "$scribl" >&2
+        scribl-list "$@"
+        exit 1
+    fi
+
+    # shellcheck disable=SC1090
+    source "$cmd_path"
+
+    if declare -F "$cmd" >/dev/null
+    then
+        "$cmd" "$@"
+    fi
+}
+
+# Runs the scribl command, providing the builtin 'use' scribl.
+scribl() {
+    local scribl="$1"
+    local cmd="$2"
+
+    case "$scribl" in
+        use)
+            shift
+            scribl-use "$@"
+            return $?
+            ;;
+        *)
+            scribl-run "$@"
+            return $?
+            ;;
+    esac
+}
+
+scribl "$@"
