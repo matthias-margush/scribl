@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+source "$(scribl use progress)"
+
+nap() {
+      run "Sleeping for five seconds" sleep 5
+}
